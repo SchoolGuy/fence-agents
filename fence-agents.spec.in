@@ -55,6 +55,7 @@ fence-agents-docker \\
 fence-agents-drac \\
 fence-agents-drac5 \\
 fence-agents-eaton-snmp \\
+fence-agents-eaton-ssh \\
 fence-agents-ecloud \\
 fence-agents-emerson \\
 fence-agents-eps \\
