@@ -1,6 +1,7 @@
 #!@PYTHON@ -tt
 
 import sys, getopt, time, os, uuid, pycurl, stat
+from typing import Any, Callable, Dict, List, NoReturn, Optional, Sequence, Tuple, Union, Pattern
 import pexpect, re, syslog
 import logging
 import subprocess
@@ -32,6 +33,13 @@ EC_INVALID_PRIVILEGES = 11
 EC_FETCH_VM_UUID = 12
 
 LOG_FORMAT = "%(asctime)-15s %(levelname)s: %(message)s"
+
+OPTIONS_TYPE = Dict[str, Any]
+SET_POWER_FN_TYPE = Callable[[Optional["fspawn"], OPTIONS_TYPE], Optional[NoReturn]]
+GET_POWER_FN_TYPE = Callable[[Optional["fspawn"], OPTIONS_TYPE], str]
+GET_OUTLET_LIST_TYPE = Callable[[Optional["fspawn"], OPTIONS_TYPE], Union[NoReturn, Dict[str, Tuple[str, str]]]]
+REBOOT_CYCLE_FN_TYPE = Callable[[Optional["fspawn"], OPTIONS_TYPE], None]
+SYNC_SET_POWER_FN_TYPE = Callable[[], None]
 
 all_opt = {
 	"help"    : {
@@ -515,20 +523,21 @@ class fspawn(pexpect.spawn):
 		pexpect.spawn.__init__(self, command, **kwargs)
 		self.opt = options
 
-	def log_expect(self, pattern, timeout):
-		result = self.expect(pattern, timeout if timeout != 0 else None)
-		logging.debug("Received: %s", self.before + self.after)
+	def log_expect(self, pattern: Union[str, Pattern, List[Union[str, Pattern]]], timeout: Optional[int]):
+		# Type checking for pexpect doesn't work correctly atm.
+		result = self.expect(pattern, timeout if timeout != 0 else None) # type: ignore
+		logging.debug("Received: %s", self.before + self.after) # type: ignore
 		return result
 
 	def read_nonblocking(self, size, timeout):
-		return pexpect.spawn.read_nonblocking(self, size=100, timeout=timeout if timeout != 0 else None)
+		return pexpect.spawn.read_nonblocking(self, size=100, timeout=timeout if timeout != 0 else None) # type: ignore
 
-	def send(self, message):
+	def send(self, message: str):
 		logging.debug("Sent: %s", message)
 		return pexpect.spawn.send(self, message)
 
 	# send EOL according to what was detected in login process (telnet)
-	def send_eol(self, message):
+	def send_eol(self, message: str):
 		return self.send(message + self.opt["eol"])
 
 def frun(command, timeout=30, withexitstatus=False, events=None,
@@ -540,7 +549,7 @@ def frun(command, timeout=30, withexitstatus=False, events=None,
 			   extra_args=extra_args, logfile=logfile, cwd=cwd,
 			   env=env, **kwargs)
 
-def atexit_handler():
+def atexit_handler() -> Optional[NoReturn]:
 	try:
 		sys.stdout.close()
 		os.close(1)
@@ -548,7 +557,7 @@ def atexit_handler():
 		logging.error("%s failed to close standard output\n", sys.argv[0])
 		sys.exit(EC_GENERIC_ERROR)
 
-def _add_dependency_options(options):
+def _add_dependency_options(options: List[str]):
 	## Add also options which are available for every fence agent
 	added_opt = []
 	for opt in options + ["default"]:
@@ -564,14 +573,14 @@ def _add_dependency_options(options):
 
 	return added_opt
 
-def fail_usage(message="", stop=True):
+def fail_usage(message="", stop=True) -> Optional[NoReturn]:
 	if len(message) > 0:
 		logging.error("%s\n", message)
 	if stop:
 		logging.error("Please use '-h' for usage\n")
 		sys.exit(EC_GENERIC_ERROR)
 
-def fail(error_code, stop=True):
+def fail(error_code: int, stop=True) -> Optional[NoReturn]:
 	message = {
 		EC_LOGIN_DENIED : "Unable to connect/login to fencing device",
 		EC_CONNECTION_LOST : "Connection lost",
@@ -590,7 +599,7 @@ def fail(error_code, stop=True):
 	if stop:
 		sys.exit(EC_GENERIC_ERROR)
 
-def usage(avail_opt):
+def usage(avail_opt) -> None:
 	print("Usage:")
 	print("\t" + os.path.basename(sys.argv[0]) + " [options]")
 	print("Options:")
@@ -613,7 +622,7 @@ def metadata(options, avail_opt, docs):
 	sorted_list.sort(key=lambda x: (x[1]["order"], x[0]))
 
 	if options["--action"] == "metadata":
-               docs["longdesc"] = re.sub("\\\\f[BPIR]|\.P|\.TP|\.br\n", "", docs["longdesc"])
+				docs["longdesc"] = re.sub("\\\\f[BPIR]|\.P|\.TP|\.br\n", "", docs["longdesc"])
 
 	print("<?xml version=\"1.0\" ?>")
 	print("<resource-agent name=\"" + os.path.basename(sys.argv[0]) + \
@@ -643,7 +652,7 @@ def metadata(options, avail_opt, docs):
 			mixed = opt["help"]
 			## split it between option and help text
 			res = re.compile(r"^(.*?--\S+)\s+", re.IGNORECASE | re.S).search(mixed)
-			if None != res:
+			if res is not None:
 				mixed = res.group(1)
 			mixed = _encode_html_entities(mixed)
 
@@ -680,7 +689,7 @@ def metadata(options, avail_opt, docs):
 	print("</actions>")
 	print("</resource-agent>")
 
-def process_input(avail_opt):
+def process_input(avail_opt: List[str]) -> Dict[str, Any]:
 	avail_opt.extend(_add_dependency_options(avail_opt))
 
 	# @todo: this should be put elsewhere?
@@ -700,12 +709,11 @@ def process_input(avail_opt):
 
 	return opt
 
-##
-## This function checks input and answers if we want to have same answers
-## in each of the fencing agents. It looks for possible errors and run
-## password script to set a correct password
-######
-def check_input(device_opt, opt, other_conditions = False):
+def check_input(device_opt: List[str], opt: Dict[str, Any], other_conditions = False):
+	"""
+	This function checks input and answers if we want to have same answers in each of the fencing agents. It looks for
+	possible errors and run password script to set a correct password.
+	"""
 	device_opt.extend(_add_dependency_options(device_opt))
 
 	options = dict(opt)
@@ -810,10 +818,14 @@ def check_input(device_opt, opt, other_conditions = False):
 
 	return options
 
-## Obtain a power status from possibly more than one plug
-##	"on" is returned if at least one plug is ON
-######
-def get_multi_power_fn(connection, options, get_power_fn):
+def get_multi_power_fn(
+	connection: Optional[fspawn],
+	options: Dict[str, Any],
+	get_power_fn: Callable[[Optional[fspawn], Dict[str, Any]], Union[str, NoReturn]]
+) -> Union[str, NoReturn]:
+	"""
+	Obtain a power status from possibly more than one plug "on" is returned if at least one plug is ON.
+	"""
 	status = "off"
 	plugs = options["--plugs"] if "--plugs" in options else [""]
 
@@ -832,7 +844,13 @@ def get_multi_power_fn(connection, options, get_power_fn):
 
 	return status
 
-def async_set_multi_power_fn(connection, options, set_power_fn, get_power_fn, retry_attempts):
+def async_set_multi_power_fn(
+	connection: fspawn,
+	options: Dict[str, Any],
+	set_power_fn: Callable[[Optional[fspawn], Dict[str, Any]], None],
+	get_power_fn: Callable[[Optional[fspawn], Dict[str, Any]], Union[str, NoReturn]],
+	retry_attempts: int
+) -> Union[bool, NoReturn]:
 	plugs = options["--plugs"] if "--plugs" in options else [""]
 
 	for _ in range(retry_attempts):
@@ -859,7 +877,7 @@ def async_set_multi_power_fn(connection, options, set_power_fn, get_power_fn, re
 
 	return False
 
-def sync_set_multi_power_fn(connection, options, sync_set_power_fn, retry_attempts):
+def sync_set_multi_power_fn(connection: fspawn, options, sync_set_power_fn, retry_attempts: int):
 	success = True
 	plugs = options["--plugs"] if "--plugs" in options else [""]
 
@@ -882,7 +900,7 @@ def sync_set_multi_power_fn(connection, options, sync_set_power_fn, retry_attemp
 	return success
 
 
-def set_multi_power_fn(connection, options, set_power_fn, get_power_fn, sync_set_power_fn, retry_attempts=1):
+def set_multi_power_fn(connection: fspawn, options, set_power_fn, get_power_fn, sync_set_power_fn, retry_attempts=1):
 
 	if set_power_fn != None:
 		if get_power_fn != None:
@@ -892,7 +910,7 @@ def set_multi_power_fn(connection, options, set_power_fn, get_power_fn, sync_set
 
 	return False
 
-def multi_reboot_cycle_fn(connection, options, reboot_cycle_fn, retry_attempts=1):
+def multi_reboot_cycle_fn(connection: fspawn, options, reboot_cycle_fn, retry_attempts=1):
 	success = True
 	plugs = options["--plugs"] if "--plugs" in options else [""]
 
@@ -914,7 +932,7 @@ def multi_reboot_cycle_fn(connection, options, reboot_cycle_fn, retry_attempts=1
 
 	return success
 
-def show_docs(options, docs=None):
+def show_docs(options: Dict[str, Any], docs: Optional[Dict[str, Any]]=None) -> Optional[NoReturn]:
 	device_opt = options["device_opt"]
 
 	if docs == None:
@@ -936,7 +954,15 @@ def show_docs(options, docs=None):
 		print(RELEASE_VERSION)
 		sys.exit(0)
 
-def fence_action(connection, options, set_power_fn, get_power_fn, get_outlet_list=None, reboot_cycle_fn=None, sync_set_power_fn=None):
+def fence_action(
+	connection: Optional[fspawn],
+	options: OPTIONS_TYPE,
+	set_power_fn: SET_POWER_FN_TYPE,
+	get_power_fn: GET_POWER_FN_TYPE,
+	get_outlet_list: Optional[GET_OUTLET_LIST_TYPE] = None,
+	reboot_cycle_fn: Optional[REBOOT_CYCLE_FN_TYPE] = None,
+	sync_set_power_fn: Optional[SYNC_SET_POWER_FN_TYPE] = None
+) -> Union[int, NoReturn]:
 	result = 0
 
 	try:
@@ -1062,7 +1088,10 @@ def fence_action(connection, options, set_power_fn, get_power_fn, get_outlet_lis
 
 	return result
 
-def fence_login(options, re_login_string=r"(login\s*: )|((?!Last )Login Name:  )|(username: )|(User Name :)"):
+def fence_login(
+	options: OPTIONS_TYPE,
+	re_login_string=r"(login\s*: )|((?!Last )Login Name:  )|(username: )|(User Name :)"
+) -> Union[fspawn, NoReturn]:
 	run_delay(options)
 
 	if "eol" not in options:
@@ -1088,14 +1117,14 @@ def fence_login(options, re_login_string=r"(login\s*: )|((?!Last )Login Name:  )
 		fail(EC_LOGIN_DENIED)
 	return conn
 
-def is_executable(path):
+def is_executable(path: Union[str, os.PathLike]):
 	if os.path.exists(path):
 		stats = os.stat(path)
 		if stat.S_ISREG(stats.st_mode) and os.access(path, os.X_OK):
 			return True
 	return False
 
-def run_commands(options, commands, timeout=None, env=None, log_command=None):
+def run_commands(options, commands, timeout: Optional[float] = None, env=None, log_command=None):
 	# inspired by psutils.wait_procs (BSD License)
 	def check_gone(proc, timeout):
 		try:
@@ -1204,7 +1233,7 @@ def run_commands(options, commands, timeout=None, env=None, log_command=None):
 
 	return (status, pipe_stdout, pipe_stderr)
 
-def run_command(options, command, timeout=None, env=None, log_command=None):
+def run_command(options, command, timeout: Optional[float] = None, env=None, log_command=None):
 	if timeout is None and "--power-timeout" in options:
 		timeout = options["--power-timeout"]
 	if timeout is not None:
@@ -1236,7 +1265,7 @@ def run_command(options, command, timeout=None, env=None, log_command=None):
 
 	return (status, pipe_stdout, pipe_stderr)
 
-def run_delay(options, reserve=0, result=0):
+def run_delay(options: Dict[str, Any], reserve=0, result=0):
 	## Delay is important for two-node clusters fencing
 	## but we do not need to delay 'status' operations
 	## and get us out quickly if we already know that we are gonna fail
@@ -1252,10 +1281,12 @@ def run_delay(options, reserve=0, result=0):
 # mark time when fence-agent is started
 run_delay.time_start = time.time()
 
-def fence_logout(conn, logout_string, sleep=0):
-	# Logout is not required part of fencing but we should attempt to do it properly
-	# In some cases our 'exit' command is faster and we can not close connection as it
-	# was already closed by fencing device
+def fence_logout(conn: fspawn, logout_string: str, sleep=0) -> None:
+	"""
+	Logout is not required part of fencing but we should attempt to do it properly.
+	In some cases our 'exit' command is faster and we can not close connection as it was already closed by fencing
+	device.
+	"""
 	try:
 		conn.send_eol(logout_string)
 		time.sleep(sleep)
@@ -1265,7 +1296,7 @@ def fence_logout(conn, logout_string, sleep=0):
 	except pexpect.ExceptionPexpect:
 		pass
 
-def source_env(env_file):
+def source_env(env_file: str):
     # POSIX: name shall not contain '=', value doesn't contain '\0'
     output = subprocess.check_output("source {} && env -0".format(env_file), shell=True,
                           executable="/bin/sh")
@@ -1273,9 +1304,11 @@ def source_env(env_file):
     os.environ.clear()
     os.environ.update(line.partition('=')[::2] for line in output.decode("utf-8").split('\0') if not re.match("^\s*$", line))
 
-# Convert array of format [[key1, value1], [key2, value2], ... [keyN, valueN]] to dict, where key is
-# in format a.b.c.d...z and returned dict has key only z
-def array_to_dict(array):
+def array_to_dict(array: List[List[Any]]) -> Dict[Any, Any]:
+	"""
+	Convert array of format [[key1, value1], [key2, value2], ... [keyN, valueN]] to dict, where key is in format
+	a.b.c.d...z and returned dict has key only z
+	"""
 	return dict([[x[0].split(".")[-1], x[1]] for x in array])
 
 ## Own logger handler that uses old-style syslog handler as otherwise everything is sourced
@@ -1300,7 +1333,7 @@ class SyslogLibHandler(logging.StreamHandler):
 		syslog.syslog(syslog_level, msg.replace("\x00", "\n"))
 		return
 
-def _open_ssl_connection(options):
+def _open_ssl_connection(options: Dict[str, Any]) -> Union[fspawn, NoReturn]:
 	gnutls_opts = ""
 	ssl_opts = ""
 
@@ -1323,7 +1356,7 @@ def _open_ssl_connection(options):
 
 	return conn
 
-def _login_ssh_with_identity_file(options):
+def _login_ssh_with_identity_file(options: Dict[str, Any]) -> Union[fspawn, NoReturn]:
 	if "--inet6-only" in options:
 		force_ipvx = "-6 "
 	elif "--inet4-only" in options:
@@ -1356,7 +1389,7 @@ def _login_ssh_with_identity_file(options):
 
 	return conn
 
-def _login_telnet(options, re_login_string):
+def _login_telnet(options: Dict[str, Any], re_login_string: str) -> Union[fspawn, NoReturn]:
 	re_login = re.compile(re_login_string, re.IGNORECASE)
 	re_pass = re.compile("(password)|(pass phrase)", re.IGNORECASE)
 
@@ -1397,7 +1430,7 @@ def _login_telnet(options, re_login_string):
 
 	return conn
 
-def _login_ssh_with_password(options, re_login_string):
+def _login_ssh_with_password(options: Dict[str, Any], re_login_string: str) -> fspawn:
 	re_login = re.compile(re_login_string, re.IGNORECASE)
 	re_pass = re.compile("(password)|(pass phrase)", re.IGNORECASE)
 
@@ -1442,7 +1475,7 @@ def _login_ssh_with_password(options, re_login_string):
 
 #
 # To update metadata, we change values in all_opt
-def _update_metadata(options):
+def _update_metadata(options: Dict[str, Any]):
 	device_opt = options["device_opt"]
 
 	if device_opt.count("login") and device_opt.count("no_login") == 0:
@@ -1486,7 +1519,7 @@ def _update_metadata(options):
 		else:
 			all_opt["ipport"]["help"] = "-u, --ipport=[port]            TCP/UDP port to use\n" + " "*40 + default_string
 
-def _set_default_values(options):
+def _set_default_values(options: Dict[str, Any]) -> Dict[str, Any]:
 	if "ipport" in options["device_opt"]:
 		if not "--ipport" in options:
 			if "default" in all_opt["ipport"]:
@@ -1518,7 +1551,7 @@ def _set_default_values(options):
 	return options
 
 # stop = True/False : exit fence agent when problem is encountered
-def _validate_input(options, stop = True):
+def _validate_input(options: Dict[str, Any], stop = True):
 	device_opt = options["device_opt"]
 	valid_input = True
 
@@ -1572,11 +1605,11 @@ def _validate_input(options, stop = True):
 
 	return valid_input
 
-def _encode_html_entities(text):
+def _encode_html_entities(text: str) -> str:
 	return text.replace("&", "&amp;").replace('"', "&quot;").replace('<', "&lt;"). \
 		replace('>', "&gt;").replace("'", "&apos;")
 
-def _prepare_getopt_args(options):
+def _prepare_getopt_args(options: List[str]) -> Tuple[str, List[str]]:
 	getopt_string = ""
 	longopt_list = []
 	for k in options:
@@ -1594,7 +1627,7 @@ def _prepare_getopt_args(options):
 
 	return (getopt_string, longopt_list)
 
-def _parse_input_stdin(avail_opt):
+def _parse_input_stdin(avail_opt: List[str]) -> Dict[str, Any]:
 	opt = {}
 	name = ""
 
@@ -1633,7 +1666,7 @@ def _parse_input_stdin(avail_opt):
 
 	return opt
 
-def _parse_input_cmdline(avail_opt):
+def _parse_input_cmdline(avail_opt: List[str]) -> Union[Dict[str, Any], NoReturn]:
 	filtered_opts = {}
 	_verify_unique_getopt(avail_opt)
 	(getopt_string, longopt_list) = _prepare_getopt_args(avail_opt)
@@ -1649,7 +1682,7 @@ def _parse_input_cmdline(avail_opt):
 		filtered_opts.update({opt : all_opt[opt]})
 
 	# Short and long getopt names are changed to consistent "--" + long name (e.g. --username)
-	long_opts = {}
+	long_opts: Dict[str, Any] = {}
 	verbose_count = 0
 	for arg_name in [k for (k, v) in entered_opt]:
 		all_key = [key for (key, value) in list(filtered_opts.items()) \
@@ -1666,8 +1699,10 @@ def _parse_input_cmdline(avail_opt):
 
 	return long_opts
 
-# for ["John", "Mary", "Eli"] returns "John, Mary and Eli"
-def _join2(words, normal_separator=", ", last_separator=" and "):
+def _join2(words: Sequence[str], normal_separator=", ", last_separator=" and "):
+	"""
+	for ["John", "Mary", "Eli"] returns "John, Mary and Eli"
+	"""
 	if len(words) <= 1:
 		return "".join(words)
 	else:
@@ -1715,7 +1750,7 @@ def _get_opts_with_invalid_types(options):
 						options_failed.append(opt)
 	return options_failed
 
-def _verify_unique_getopt(avail_opt):
+def _verify_unique_getopt(avail_opt: List[str]) -> Optional[NoReturn]:
 	used_getopt = set()
 
 	for opt in avail_opt:
